@@ -1,31 +1,41 @@
-// src/app/(dashboard)/layout.tsx
+// src/app/dashboard/layout.tsx
+'use client';
+
+import { useState, ReactNode } from 'react';
 import Sidebar from '@/components/dashboard/sidebar';
 import Header from '@/components/dashboard/header';
 
 /**
- * @description Layout principal para as rotas autenticadas do sistema.
- * Utiliza CSS Grid/Flexbox para estruturar a Sidebar lateral fixa e o 
- * conteúdo dinâmico (Header + Página) ao lado.
- * 
- * @param {React.ReactNode} children - A página específica que será renderizada no centro.
- * @returns {JSX.Element} A estrutura de layout mestre do painel.
+ * @interface DashboardLayoutProps
+ * @description Propriedades do layout mestre contendo os filhos a serem renderizados.
  */
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex min-h-screen bg-slate-50">
-      {/* Sidebar fixa na esquerda */}
-      <Sidebar />
+interface DashboardLayoutProps {
+  children: ReactNode;
+}
 
-      {/* Área principal de conteúdo à direita */}
+/**
+ * @component DashboardRootLayout
+ * @description Orquestrador mestre da área restrita da aplicação.
+ * Integra a Sidebar retrátil ao Header corporativo e encapsula a área de conteúdo.
+ * 
+ * @param {DashboardLayoutProps} props - Children das rotas filhas.
+ * @returns {JSX.Element} Layout estruturado.
+ */
+export default function DashboardRootLayout({ children }: DashboardLayoutProps) {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
+  return (
+    <div className="flex min-h-screen bg-slate-100 font-sans">
+      {/* Sidebar Retrátil */}
+      <Sidebar 
+        isOpen={isSidebarOpen} 
+        onToggle={() => setIsSidebarOpen(prev => !prev)} 
+      />
+
+      {/* Área Principal de Conteúdo */}
       <div className="flex-1 flex flex-col min-w-0">
         <Header />
-        
-        {/* O conteúdo dinâmico (telas) é injetado aqui */}
-        <main className="flex-1 p-6 overflow-y-auto">
+        <main className="flex-1 p-8 overflow-y-auto">
           {children}
         </main>
       </div>
