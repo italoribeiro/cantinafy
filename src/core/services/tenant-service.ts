@@ -3,13 +3,13 @@ import { supabaseAdmin } from '@/lib/supabase/admin';
 
 /**
  * @interface OnboardingData
- * @description Estrutura de dados exigida (Payload) para a criação de um novo Tenant no sistema.
- * Agrupa credenciais, identificação jurídica e localização geográfica.
+ * @description Estrutura de transferência de dados (DTO) exigida para o provisionamento inicial de um Tenant.
+ * Agrupa as credenciais de acesso, dados fiscais, localização e o nível de licenciamento (Plano SaaS).
  */
 interface OnboardingData {
   email: string;
   senha_pura: string;
-  tipoDocumento: string; // Espera 'PF' ou 'PJ' do frontend
+  tipoDocumento: string; // Interface espera 'PF' (Física) ou 'PJ' (Jurídica)
   documento: string;
   nomeFantasia: string;
   razaoSocial?: string;
@@ -21,42 +21,69 @@ interface OnboardingData {
   bairro: string;
   cidade: string;
   estado: string;
+  plano: 'free' | 'basico' | 'profissional' | 'avancado' | 'premium'; // Identificador do SaaS
+}
+
+/**
+ * @function getLimiteUsuariosPorPlano
+ * @description Função auxiliar de regra de negócio (Business Rule). 
+ * Mapeia o plano contratado pelo locatário (Tenant) para a cota máxima técnica de usuários que podem ser criados.
+ * Isso garante que a infraestrutura aplique restrições baseadas na assinatura.
+ * 
+ * @param {string} plano - A chave identificadora do plano selecionado no Onboarding.
+ * @returns {number} A cota máxima absoluta de perfis de usuário permitidos.
+ */
+function getLimiteUsuariosPorPlano(plano: string): number {
+  switch (plano) {
+    case 'free': return 1;
+    case 'basico': return 1;
+    case 'profissional': return 3;
+    case 'avancado': return 10;
+    case 'premium': return 999; // Representa um limite virtualmente infinito na lógica de banco
+    default: return 1; // Fallback de segurança para evitar vazamento de privilégios
+  }
 }
 
 /**
  * @function createTenantOnboarding
- * @description Orquestra a criação do Usuário Auth, Tenant com Endereço, Filial Matriz, 
- * Perfil Mestre (Cargo) e Matriz de Acessos (RBAC Modular).
- * Atua de forma pseudo-transacional: se qualquer inserção no banco falhar, realiza o rollback 
- * manual excluindo o usuário do Auth para evitar dados órfãos e inconsistência.
+ * @description Motor transacional que orquestra o setup completo de uma nova empresa.
+ * Cria o Usuário no Auth, o Tenant (com endereço e limites do plano), a Filial Matriz, 
+ * o Perfil Base (Cargo) e a Matriz de Permissões (RBAC).
  * 
- * @param {OnboardingData} data - Objeto contendo todos os dados do Wizard de Cadastro.
- * @returns {Promise<{success: boolean, tenantId: string}>} O ID do novo Tenant criado.
- * @throws {Error} Lança um erro descritivo caso qualquer etapa da orquestração falhe.
+ * ATENÇÃO ARQUITETURAL: Como o Supabase não suporta transações nativas entre o Schema `auth` 
+ * e o `public` facilmente via API HTTP, esta função utiliza um padrão de "Mecanismo de Compensação" 
+ * (Rollback Manual). Se qualquer etapa de inserção falhar, o usuário criado no cofre de senhas é deletado,
+ * prevenindo bancos de dados particionados ou usuários fantasmas.
+ * 
+ * @param {OnboardingData} data - O objeto consolidado capturado pela UI do Wizard.
+ * @returns {Promise<{success: boolean, tenantId: string}>} Feedback de sucesso e a chave primária da empresa.
+ * @throws {Error} Interrompe o fluxo e envia uma mensagem humanizada para a View em caso de falha de rede ou SQL.
  */
 export async function createTenantOnboarding(data: OnboardingData) {
   
-  // ==========================================
-  // PASSO 1: CRIAÇÃO DE CREDENCIAIS (AUTH)
-  // ==========================================
+  // ====================================================================================
+  // PASSO 1: CRIAÇÃO DE CREDENCIAIS DE ACESSO (SUPABASE AUTH)
+  // ====================================================================================
   const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
     email: data.email,
     password: data.senha_pura,
-    email_confirm: true, // Força a confirmação para agilizar a entrada no MVP
+    email_confirm: true, // Bypass de e-mail de confirmação para acelerar o MVP (Cold Start)
   });
 
   if (authError || !authData.user) {
-    throw new Error(`Erro ao criar usuário: ${authError?.message}`);
+    throw new Error(`Falha de segurança ao provisionar acesso: ${authError?.message}`);
   }
 
   const userId = authData.user.id;
 
   try {
-    // ==========================================
-    // PASSO 2: CRIAÇÃO DO TENANT (EMPRESA/GRUPO)
-    // ==========================================
-    // Otimização de armazenamento: Converte 'PF' para 'F' e 'PJ' para 'J'
+    // ====================================================================================
+    // PASSO 2: PROVISIONAMENTO DO TENANT (MATRIZ EMPRESARIAL E LICENCIAMENTO)
+    // ====================================================================================
+    
+    // Normalização de Dados: Otimiza o armazenamento no banco convertendo strings longas em char único
     const charTipo = data.tipoDocumento === 'PJ' ? 'J' : 'F'; 
+    const limiteUsuarios = getLimiteUsuariosPorPlano(data.plano);
 
     const { data: tenantData, error: tenantError } = await supabaseAdmin
       .from('tenants')
@@ -64,8 +91,8 @@ export async function createTenantOnboarding(data: OnboardingData) {
         { 
           nome_fantasia: data.nomeFantasia,
           razao_social: data.razaoSocial,
-          tipo_documento: charTipo, // Salva apenas 'F' ou 'J'
-          cnpj_cpf: data.documento, // Correção: apontando para a coluna correta no banco
+          tipo_documento: charTipo, // Salva 'J' ou 'F'
+          cnpj_cpf: data.documento, // Persiste o documento principal
           whatsapp: data.whatsapp,
           cep: data.cep,
           logradouro: data.logradouro,
@@ -74,7 +101,8 @@ export async function createTenantOnboarding(data: OnboardingData) {
           bairro: data.bairro,
           cidade: data.cidade,
           estado: data.estado,
-          plano_atual: 'free_6_meses' // Liberação estratégica de inauguração
+          plano_atual: data.plano, // Grava a assinatura escolhida no onboarding
+          limite_usuarios: limiteUsuarios // Define a trava operacional sistêmica
         }
       ])
       .select('id')
@@ -83,9 +111,10 @@ export async function createTenantOnboarding(data: OnboardingData) {
     if (tenantError) throw tenantError;
     const tenantId = tenantData.id;
 
-    // ==========================================
-    // PASSO 3: CRIAÇÃO DA FILIAL MATRIZ
-    // ==========================================
+    // ====================================================================================
+    // PASSO 3: CRIAÇÃO DA FILIAL PADRÃO (ESTRUTURA FÍSICA)
+    // ====================================================================================
+    // Necessário pois o controle de PDV e Estoque exige uma localidade física (filial_id)
     const { data: filialData, error: filialError } = await supabaseAdmin
       .from('filiais')
       .insert([
@@ -101,11 +130,11 @@ export async function createTenantOnboarding(data: OnboardingData) {
     if (filialError) throw filialError;
     const filialId = filialData.id;
 
-    // ==========================================
-    // PASSO 4: CRIAÇÃO DO PERFIL E ACESSOS MODULARES (RBAC)
-    // ==========================================
+    // ====================================================================================
+    // PASSO 4: FABRICAÇÃO DO CONTROLE DE ACESSO (RBAC) E PERMISSÕES
+    // ====================================================================================
     
-    // 4.1 Cria o perfil mestre (O Cargo na empresa)
+    // 4.1 Instanciação do Cargo Hierárquico
     const { data: perfilData, error: perfilInsertError } = await supabaseAdmin
       .from('perfis')
       .insert([
@@ -120,8 +149,8 @@ export async function createTenantOnboarding(data: OnboardingData) {
     if (perfilInsertError) throw perfilInsertError;
     const perfilId = perfilData.id;
 
-    // 4.2 Atribui poder total (Full Access) em todos os módulos core para o Perfil Mestre
-    const modulosCore = ['pdv', 'financeiro', 'produtos', 'configuracoes'];
+    // 4.2 Atribuição em Lote (Bulk Insert) de privilégios para os módulos core
+    const modulosCore = ['pdv', 'cozinha_kds', 'produtos', 'configuracoes'];
     const permissoesPayload = modulosCore.map(mod => ({
       perfil_id: perfilId,
       modulo: mod,
@@ -137,30 +166,31 @@ export async function createTenantOnboarding(data: OnboardingData) {
 
     if (permissoesError) throw permissoesError;
 
-    // 4.3 Vincula o Usuário Auth ao Perfil Administrativo (RBAC)
+    // 4.3 Acoplamento: Vincula a identidade de Auth ao Perfil Administrativo e à Empresa
     const { error: userProfileError } = await supabaseAdmin
       .from('perfis_usuarios')
       .insert([
         {
           id: userId,
           tenant_id: tenantId,
-          filial_id: filialId, // Vincula à matriz inicialmente
-          perfil_id: perfilId, // Chave estrangeira para a tabela de perfis
-          nome: 'Administrador do Sistema' // Editável no painel posteriormente
+          filial_id: filialId, 
+          perfil_id: perfilId, 
+          nome: 'Dono da Cantina' // Pode ser alterado depois no painel de perfil
         }
       ]);
 
     if (userProfileError) throw userProfileError;
 
-    // Conclusão bem-sucedida da esteira de fabricação
+    // Finalização com integridade total
     return { success: true, tenantId };
 
   } catch (error: any) {
-    // ==========================================
-    // FALLBACK (MECANISMO DE ROLLBACK)
-    // ==========================================
-    // Se o banco falhar, excluímos o usuário no Cofre (Auth) para permitir nova tentativa
+    // ====================================================================================
+    // FALLBACK: MECANISMO DE ROLLBACK DE SEGURANÇA
+    // ====================================================================================
+    // Ação vital: Exclui a chave de acesso gerada no Passo 1 para não travar o e-mail do cliente,
+    // permitindo que ele tente novamente sem o erro de "e-mail já cadastrado".
     await supabaseAdmin.auth.admin.deleteUser(userId);
-    throw new Error(`Falha na estruturação do Tenant: ${error.message}`);
+    throw new Error(`Falha sistêmica na montagem da empresa: ${error.message}`);
   }
 }

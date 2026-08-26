@@ -5,16 +5,17 @@ import { createTenantOnboarding } from '@/core/services/tenant-service';
 
 /**
  * @function fetchCnpjData
- * @description Realiza uma chamada HTTP para a API pública do ReceitaWS.
- * Feito no ambiente Server-Side para proteger a requisição e evitar bloqueios CORS do navegador.
+ * @description Proxy Server-Side para consumo da API pública ReceitaWS.
+ * Ao executar no servidor do Next.js, mitigamos os bloqueios de política de CORS do navegador 
+ * e protegemos a lógica de formatação de documento.
  * 
- * @param {string} cnpj - A string do CNPJ, com ou sem máscara.
- * @returns {Promise<Object>} Um objeto contendo status de erro ou os dados consolidados (sucesso).
+ * @param {string} cnpj - String bruta enviada pelo formulário (pode conter pontuação).
+ * @returns {Promise<Object>} DTO contendo os dados fiscais e geográficos normalizados ou mensagem de erro.
  */
 export async function fetchCnpjData(cnpj: string) {
-  // Limpeza da máscara para garantir que apenas números cheguem na API
+  // Higienização de entrada: Remove tudo que não for dígito
   const cleanCnpj = cnpj.replace(/\D/g, '');
-  if (cleanCnpj.length !== 14) return { error: 'CNPJ inválido' };
+  if (cleanCnpj.length !== 14) return { error: 'CNPJ inválido ou incompleto.' };
 
   try {
     const response = await fetch(`https://receitaws.com.br/v1/cnpj/${cleanCnpj}`);
@@ -22,7 +23,7 @@ export async function fetchCnpjData(cnpj: string) {
     
     if (data.status === 'ERROR') return { error: data.message };
     
-    // Mapeamento semântico do payload da Receita Federal
+    // Normalização semântica: Traduz as chaves da API de terceiros para o padrão da nossa aplicação
     return {
       success: true,
       nomeFantasia: data.fantasia || data.nome,
@@ -32,55 +33,55 @@ export async function fetchCnpjData(cnpj: string) {
       numero: data.numero || '',
       complemento: data.complemento || '',
       bairro: data.bairro || '',
-      cidade: data.municipio || '', 
+      cidade: data.municipio || '', // A API retorna 'municipio', nosso banco espera 'cidade'
       estado: data.uf || '',        
     };
   } catch (error) {
-    return { error: 'Falha de rede ao consultar a Receita Federal.' };
+    return { error: 'Falha de comunicação de rede com o serviço da Receita Federal.' };
   }
 }
 
 /**
  * @function fetchCepData
- * @description Realiza uma chamada HTTP para a API pública do ViaCEP.
- * Retorna os dados padronizados de logradouro para autopreenchimento no Frontend.
+ * @description Proxy Server-Side para consulta de logradouros no ViaCEP.
+ * Otimiza a experiência do usuário promovendo autopreenchimento de dados geográficos.
  * 
- * @param {string} cep - A string do CEP, com ou sem máscara.
- * @returns {Promise<Object>} Um objeto contendo status de erro ou os dados geográficos.
+ * @param {string} cep - String bruta do CEP (com ou sem hífen).
+ * @returns {Promise<Object>} DTO contendo bairro, rua, cidade e UF.
  */
 export async function fetchCepData(cep: string) {
   const cleanCep = cep.replace(/\D/g, '');
-  if (cleanCep.length !== 8) return { error: 'CEP inválido' };
+  if (cleanCep.length !== 8) return { error: 'CEP estruturalmente inválido.' };
 
   try {
     const response = await fetch(`https://viacep.com.br/ws/${cleanCep}/json/`);
     const data = await response.json();
     
-    if (data.erro) return { error: 'CEP não encontrado na base dos Correios.' };
+    // O ViaCEP retorna sucesso HTTP mesmo quando o CEP não existe, mas envia a flag { erro: true }
+    if (data.erro) return { error: 'CEP não encontrado na base de dados dos Correios.' };
     
     return {
       success: true,
       logradouro: data.logradouro,
       bairro: data.bairro,
-      cidade: data.localidade,
+      cidade: data.localidade, // Tradução de nomenclatura
       estado: data.uf,
     };
   } catch (error) {
-    return { error: 'Falha de rede ao consultar o serviço de CEP.' };
+    return { error: 'Falha de comunicação de rede com o serviço de CEP.' };
   }
 }
 
 /**
  * @function handleCadastroWizard
- * @description Orquestrador principal acionado no `onSubmit` da tela final do Wizard.
- * Responsável por extrair os dados do FormData instanciado pelo cliente, validar campos vitais
- * e invocar a camada de serviço (Core) para persistência no banco.
+ * @description Orquestrador Controller (Action). Responsável por interceptar o submit do formulário 
+ * no Frontend, extrair o FormData tipado, realizar as validações defensivas primárias e acionar o Core Service.
  * 
- * @param {FormData} formData - Objeto nativo contendo todos os inputs do usuário.
- * @returns {Promise<Object>} Status de sucesso ou a mensagem de erro formatada.
+ * @param {FormData} formData - Objeto nativo Web API contendo o estado submetido pela View.
+ * @returns {Promise<Object>} Resposta unificada de sucesso (boolean) ou falha amigável (string).
  */
 export async function handleCadastroWizard(formData: FormData) {
-  // 1. Extração tipada de dados do FormData
+  // 1. Extração Dinâmica e Tipagem do Payload de Rede
   const email = formData.get('email') as string;
   const password = formData.get('password') as string;
   const tipoDocumento = formData.get('tipoDocumento') as string;
@@ -95,13 +96,17 @@ export async function handleCadastroWizard(formData: FormData) {
   const bairro = formData.get('bairro') as string;
   const cidade = formData.get('cidade') as string;
   const estado = formData.get('estado') as string;
+  
+  // Extração do Plano SaaS: Aplica fallback rigoroso caso a interface envie um valor nulo
+  const plano = (formData.get('plano') as any) || 'free';
 
-  // 2. Validação Defensiva Básica
+  // 2. Validação Defensiva (Sanitization Level 1)
+  // Previne chamadas desnecessárias ao banco de dados garantindo a integridade mínima
   if (!email || password.length < 6 || !nomeFantasia || !documento) {
-    return { error: 'Dados incompletos. Verifique os campos obrigatórios na etapa final.' };
+    return { error: 'A integridade dos dados falhou. Preencha todos os campos vitais corretamente.' };
   }
 
-  // 3. Invocação da Regra de Negócio (Camada Core)
+  // 3. Invocação da Regra de Negócio Transacional (Camada Core)
   try {
     await createTenantOnboarding({
       email,
@@ -117,12 +122,14 @@ export async function handleCadastroWizard(formData: FormData) {
       complemento,
       bairro,
       cidade,
-      estado
+      estado,
+      plano // Repassa a escolha do licenciamento
     });
     
+    // Sinaliza à View que a operação foi concluída e o redirecionamento pode ocorrer
     return { success: true };
   } catch (error: any) {
-    // Retorna a exceção formatada para ser exibida no componente visual de erro
+    // Intercepta exceções lançadas pelo Service (ex: usuário existente, falha no banco)
     return { error: error.message };
   }
 }
