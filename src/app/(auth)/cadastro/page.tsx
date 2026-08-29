@@ -1,47 +1,81 @@
 // src/app/(auth)/cadastro/page.tsx
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { handleCadastroWizard, fetchCnpjData, fetchCepData } from './actions';
+import { handleCadastroWizard, fetchCnpjData, fetchCepData, fetchPlanosAtivos } from './actions';
 
 /**
- * @description Página de Onboarding e Cadastro (Wizard de 2 Etapas).
- * Responsável por coletar as credenciais do usuário e os dados estruturais da cantina (Tenant).
+ * @interface PlanoAssinatura
+ * @description Espelho da tipagem da tabela adm_planos_assinatura para controle de estado interno.
+ */
+interface PlanoAssinatura {
+  codigo: string;
+  nome: string;
+  descricao: string;
+  preco_mensal: number;
+  limite_usuarios: number;
+  features: any; // Armazenado como JSONB
+  is_destaque: boolean;
+}
+
+/**
+ * @component CadastroWizardPage
+ * @description View de Onboarding (Máquina de Estado UI com 2 Passos).
+ * Etapa 1: Credenciais de Acesso.
+ * Etapa 2: Seleção Dinâmica de Plano SaaS (carregada do banco) e Dados Estruturais da Cantina.
  * 
- * Implementa integrações ativas de UI:
- * - ReceitaWS: Autopreenchimento de dados e endereço a partir de um CNPJ válido.
- * - ViaCEP: Autopreenchimento de localização a partir do CEP.
- *
- * @returns {JSX.Element} A interface interativa de cadastro renderizada.
+ * @returns {JSX.Element} A interface interativa de cadastro.
  */
 export default function CadastroWizardPage() {
   const router = useRouter();
   
   // ==========================================
-  // ESTADOS DO COMPONENTE
+  // ESTADOS DO COMPONENTE (STATE MACHINE)
   // ==========================================
-  
-  // Controle de fluxo do Wizard e feedback visual
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   
-  // Modelo de dados centralizado do formulário (State Machine)
+  // Estado para armazenar o catálogo de planos vindos do banco de dados
+  const [planosDb, setPlanosDb] = useState<PlanoAssinatura[]>([]);
+  
   const [formData, setFormData] = useState({
     email: '', password: '', tipoDocumento: 'PJ', documento: '',
     nomeFantasia: '', razaoSocial: '', whatsapp: '',
-    cep: '', logradouro: '', numero: '', complemento: '', bairro: '', cidade: '', estado: ''
+    cep: '', logradouro: '', numero: '', complemento: '', bairro: '', 
+    cidade: '', estado: '', 
+    plano: 'free' // Estado inicial (será sobreposto pelo primeiro plano do banco se necessário)
   });
 
   // ==========================================
-  // CONTROLADORES DE EVENTOS (HANDLERS)
+  // EFEITOS DE CICLO DE VIDA (DATA FETCHING)
+  // ==========================================
+  useEffect(() => {
+    /**
+     * @description Carrega os planos parametrizados no Backoffice de forma assíncrona
+     * no momento em que a página de cadastro é montada no navegador.
+     */
+    async function loadPlanos() {
+      const planos = await fetchPlanosAtivos();
+      setPlanosDb(planos);
+      
+      // Auto-seleção amigável: se a tabela de planos retornou dados mas não tem plano 'free',
+      // seleciona automaticamente o primeiro plano da lista para evitar form quebrado.
+      if (planos.length > 0 && !planos.find(p => p.codigo === 'free')) {
+        setFormData(prev => ({ ...prev, plano: planos[0].codigo }));
+      }
+    }
+    loadPlanos();
+  }, []);
+
+  // ==========================================
+  // CONTROLADORES DE FLUXO (HANDLERS)
   // ==========================================
 
   /**
-   * @description Valida os dados de credenciais da Etapa 1 e avança para a Etapa 2.
-   * @param {React.FormEvent} e - Evento de submissão do formulário padrão.
+   * @description Valida a Etapa 1 (Email/Senha) e avança para a escolha do plano.
    */
   const handleNextStep = (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,12 +88,9 @@ export default function CadastroWizardPage() {
   };
 
   /**
-   * @description Acionado no `onBlur` do campo de Documento.
-   * Consulta a Server Action do ReceitaWS caso seja Pessoa Jurídica.
-   * Promove o autopreenchimento reativo sem recarregar a tela.
+   * @description Gatilho OnBlur para consumir a API da Receita Federal via Server Action.
    */
   const handleBuscaCnpj = async () => {
-    // Evita chamadas desnecessárias se for PF ou CNPJ incompleto
     if (formData.tipoDocumento !== 'PJ' || formData.documento.length < 14) return;
     
     setIsLoading(true);
@@ -83,8 +114,7 @@ export default function CadastroWizardPage() {
   };
 
   /**
-   * @description Acionado no `onBlur` do campo de CEP.
-   * Consulta a Server Action do ViaCEP para enriquecer os dados de localização.
+   * @description Gatilho OnBlur para consumir a API ViaCEP e preencher ruas/cidades.
    */
   const handleBuscaCep = async () => {
     if (formData.cep.length < 8) return;
@@ -107,16 +137,13 @@ export default function CadastroWizardPage() {
   };
 
   /**
-   * @description Orquestra a submissão final do cadastro (Etapa 2).
-   * Converte o estado React para FormData e delega a execução à Server Action.
-   * @param {React.FormEvent} e - Evento de submissão do formulário.
+   * @description Submissão final (Etapa 2) que empacota o estado no FormData e aciona o motor transacional.
    */
   const handleFinalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setErrorMsg('');
 
-    // Prepara os dados nativos para a Server Action trafegar via rede
     const data = new FormData();
     Object.entries(formData).forEach(([key, value]) => data.append(key, value as string));
 
@@ -126,7 +153,6 @@ export default function CadastroWizardPage() {
       setErrorMsg(result.error);
       setIsLoading(false);
     } else {
-      // Sucesso: Redireciona o novo dono de cantina para o Login
       router.push('/login');
     }
   };
@@ -134,28 +160,28 @@ export default function CadastroWizardPage() {
   // ==========================================
   // RENDERIZAÇÃO DA INTERFACE (VIEWS)
   // ==========================================
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
-      <div className="w-full max-w-2xl p-8 bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 my-8">
+      {/* Max-w-4xl implementado para expandir horizontalmente e acomodar os cards de planos */}
+      <div className="w-full max-w-4xl p-8 bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-100 my-8 transition-all">
         
-        {/* Cabeçalho do Wizard */}
+        {/* Cabeçalho Global do Wizard */}
         <div className="text-center mb-8">
           <div className="text-3xl font-black tracking-tighter mb-2">
             <span className="text-slate-900">cantina</span><span className="text-red-600">fy</span>
           </div>
           <h1 className="text-xl font-bold text-slate-800">
-            {step === 1 ? 'Crie sua conta de acesso' : 'Dados da sua Cantina'}
+            {step === 1 ? 'Crie sua conta de acesso' : 'Escolha seu plano e dados da cantina'}
           </h1>
           
-          {/* Indicadores Visuais de Etapa (Steps) */}
+          {/* Indicadores Visuais de Etapa (Steps Bar) */}
           <div className="flex justify-center gap-2 mt-4">
-            <div className={`h-2 w-12 rounded-full ${step >= 1 ? 'bg-red-600' : 'bg-slate-200'}`} />
-            <div className={`h-2 w-12 rounded-full ${step >= 2 ? 'bg-red-600' : 'bg-slate-200'}`} />
+            <div className={`h-2 w-12 rounded-full transition-colors ${step >= 1 ? 'bg-red-600' : 'bg-slate-200'}`} />
+            <div className={`h-2 w-12 rounded-full transition-colors ${step >= 2 ? 'bg-red-600' : 'bg-slate-200'}`} />
           </div>
         </div>
 
-        {/* Feedback Visual de Erros */}
+        {/* Feedback Visual de Erros Centralizado */}
         {errorMsg && (
           <div className="mb-6 p-3 bg-red-50 text-red-600 rounded-lg text-sm font-medium text-center border border-red-100">
             {errorMsg}
@@ -163,11 +189,11 @@ export default function CadastroWizardPage() {
         )}
 
         {/* ========================================================
-            ETAPA 1: CREDENCIAIS DE ACESSO
+            ETAPA 1: CREDENCIAIS
             ======================================================== */}
         {step === 1 && (
           <form onSubmit={handleNextStep} className="space-y-5 max-w-md mx-auto">
-             <div>
+            <div>
               <label className="block text-sm font-bold text-slate-700 mb-1">E-mail do Administrador</label>
               <input 
                 type="email" required
@@ -187,7 +213,7 @@ export default function CadastroWizardPage() {
                 placeholder="Mínimo 6 caracteres"
               />
             </div>
-            <button type="submit" className="w-full py-3.5 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all">
+            <button type="submit" className="w-full py-3.5 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 transition-all shadow-md">
               Continuar ➔
             </button>
             <div className="text-center text-sm font-medium text-slate-500 mt-4">
@@ -197,16 +223,69 @@ export default function CadastroWizardPage() {
         )}
 
         {/* ========================================================
-            ETAPA 2: DADOS ESTRUTURAIS E ENDEREÇO DO NEGÓCIO
+            ETAPA 2: DADOS E PLANOS (AGORA DINÂMICOS)
             ======================================================== */}
         {step === 2 && (
           <form onSubmit={handleFinalSubmit} className="space-y-6">
             
-            {/* Bloco 1: Identificação e Documentação */}
-            <div className="bg-slate-50 p-5 rounded-xl border border-slate-100 space-y-5">
+            {/* Bloco 1: Seleção Dinâmica do Plano SaaS gerada via banco */}
+            <div className="space-y-3">
+              <h3 className="text-sm font-black text-slate-400 uppercase tracking-wider">Planos Disponíveis</h3>
+              
+              {/* Tratamento UX: Feedback visual enquanto a API carrega os planos */}
+              {planosDb.length === 0 ? (
+                <div className="p-4 text-center text-slate-500 text-sm bg-slate-50 rounded-xl border border-slate-200 animate-pulse">
+                  Carregando planos de assinatura seguros...
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                  {/* Função Map itera sobre os planos retornados pelo Supabase criando os cartões */}
+                  {planosDb.map((plano) => (
+                    <button
+                      key={plano.codigo}
+                      type="button"
+                      onClick={() => setFormData({...formData, plano: plano.codigo})}
+                      className={`p-4 rounded-xl border-2 text-left transition-all relative flex flex-col justify-between ${
+                        formData.plano === plano.codigo 
+                          ? 'border-red-600 bg-red-50/50 shadow-md ring-2 ring-red-600/20' 
+                          : 'border-slate-200 hover:border-slate-300 bg-white'
+                      }`}
+                    >
+                      {/* Flag Visual de Destaque Comercial */}
+                      {plano.is_destaque && (
+                        <span className="absolute -top-2.5 right-2 bg-red-600 text-white text-[9px] font-black px-2 py-0.5 rounded-full uppercase">
+                          Mais Escolhido
+                        </span>
+                      )}
+                      
+                      <div>
+                        <span className={`text-xs font-bold uppercase block ${plano.is_destaque ? 'text-red-600' : 'text-slate-500'}`}>
+                          {plano.nome}
+                        </span>
+                        <p className="text-lg font-black text-slate-900 mt-1">
+                          {plano.preco_mensal === 0 ? 'Grátis' : `R$ ${plano.preco_mensal}`}
+                          {plano.preco_mensal > 0 && <span className="text-[10px] font-normal text-slate-500">/mês</span>}
+                        </p>
+                        <p className="text-[11px] text-slate-600 mt-1.5 font-medium leading-tight min-h-[2rem]">
+                          {plano.descricao}
+                        </p>
+                      </div>
+
+                      {/* Tag Inferior: Informação Operacional sobre a Cota de Usuários */}
+                      <span className={`inline-block mt-3 px-2 py-0.5 text-[10px] font-bold rounded w-fit ${plano.limite_usuarios > 10 ? 'bg-green-100 text-green-800' : 'bg-slate-200 text-slate-700'}`}>
+                        {plano.limite_usuarios === 999 ? 'Usuários Ilimitados' : `Até ${plano.limite_usuarios} usuários`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Bloco 2: Identificação Jurídica/Física */}
+            <div className="bg-slate-50 p-5 rounded-xl border border-slate-100 space-y-4">
               <h3 className="text-sm font-black text-slate-400 uppercase tracking-wider">Identificação</h3>
               
-              {/* Botões Toggle de Seleção de Natureza Jurídica */}
+              {/* Botões Toggle de Natureza Jurídica */}
               <div className="grid grid-cols-2 gap-4">
                 <button 
                   type="button"
@@ -224,6 +303,7 @@ export default function CadastroWizardPage() {
                 </button>
               </div>
 
+              {/* Campos de Identidade e Contato */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-1">
@@ -233,7 +313,7 @@ export default function CadastroWizardPage() {
                     type="text" required
                     value={formData.documento}
                     onChange={e => setFormData({...formData, documento: e.target.value})}
-                    onBlur={handleBuscaCnpj}
+                    onBlur={handleBuscaCnpj} // Aciona a inteligência da ReceitaWS
                     className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-red-600 outline-none text-sm font-medium"
                     placeholder={formData.tipoDocumento === 'PJ' ? '00.000.000/0001-00' : '000.000.000-00'}
                   />
@@ -261,10 +341,11 @@ export default function CadastroWizardPage() {
               </div>
             </div>
 
-            {/* Bloco 2: Localização Geográfica */}
+            {/* Bloco 3: Localização Geográfica */}
             <div className="bg-slate-50 p-5 rounded-xl border border-slate-100 space-y-4">
               <h3 className="text-sm font-black text-slate-400 uppercase tracking-wider mb-2">Localização</h3>
               
+              {/* Linha 1: CEP e Logradouro */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-1">
                   <label className="block text-sm font-bold text-slate-700 mb-1">CEP</label>
@@ -272,7 +353,7 @@ export default function CadastroWizardPage() {
                     type="text" required maxLength={9}
                     value={formData.cep}
                     onChange={e => setFormData({...formData, cep: e.target.value})}
-                    onBlur={handleBuscaCep}
+                    onBlur={handleBuscaCep} // Aciona a inteligência do ViaCEP
                     className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-red-600 outline-none text-sm font-medium"
                     placeholder="00000-000"
                   />
@@ -288,6 +369,7 @@ export default function CadastroWizardPage() {
                 </div>
               </div>
 
+              {/* Linha 2: Número e Complemento (Restauração da quebra solicitada) */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-1">
                   <label className="block text-sm font-bold text-slate-700 mb-1">Número</label>
@@ -310,6 +392,7 @@ export default function CadastroWizardPage() {
                 </div>
               </div>
 
+              {/* Linha 3: Bairro, Cidade e UF (Separados) */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-1">Bairro</label>
@@ -342,7 +425,7 @@ export default function CadastroWizardPage() {
               </div>
             </div>
 
-            {/* Ações Finais do Wizard */}
+            {/* Ações Finais (Botões de Navegação e Submit) */}
             <div className="flex gap-3 pt-4">
               <button 
                 type="button" 
@@ -356,7 +439,7 @@ export default function CadastroWizardPage() {
                 disabled={isLoading}
                 className="flex-1 py-3.5 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 disabled:opacity-70 shadow-lg shadow-red-600/20 transition-all"
               >
-                {isLoading ? 'Finalizando...' : 'Concluir Cadastro'}
+                {isLoading ? 'Configurando sua operação...' : 'Concluir Cadastro'}
               </button>
             </div>
           </form>

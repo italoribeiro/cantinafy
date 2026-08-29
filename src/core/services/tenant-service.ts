@@ -21,34 +21,14 @@ interface OnboardingData {
   bairro: string;
   cidade: string;
   estado: string;
-  plano: 'free' | 'basico' | 'profissional' | 'avancado' | 'premium'; // Identificador do SaaS
-}
-
-/**
- * @function getLimiteUsuariosPorPlano
- * @description Função auxiliar de regra de negócio (Business Rule). 
- * Mapeia o plano contratado pelo locatário (Tenant) para a cota máxima técnica de usuários que podem ser criados.
- * Isso garante que a infraestrutura aplique restrições baseadas na assinatura.
- * 
- * @param {string} plano - A chave identificadora do plano selecionado no Onboarding.
- * @returns {number} A cota máxima absoluta de perfis de usuário permitidos.
- */
-function getLimiteUsuariosPorPlano(plano: string): number {
-  switch (plano) {
-    case 'free': return 1;
-    case 'basico': return 1;
-    case 'profissional': return 3;
-    case 'avancado': return 10;
-    case 'premium': return 999; // Representa um limite virtualmente infinito na lógica de banco
-    default: return 1; // Fallback de segurança para evitar vazamento de privilégios
-  }
+  plano: string; // Código dinâmico do plano selecionado na UI (Ex: 'free', 'profissional')
 }
 
 /**
  * @function createTenantOnboarding
  * @description Motor transacional que orquestra o setup completo de uma nova empresa.
- * Cria o Usuário no Auth, o Tenant (com endereço e limites do plano), a Filial Matriz, 
- * o Perfil Base (Cargo) e a Matriz de Permissões (RBAC).
+ * Cria o Usuário no Auth, verifica dinamicamente as regras do Plano SaaS, provisiona o Tenant 
+ * (com endereço e limites do plano), a Filial Matriz, o Perfil Base (Cargo) e a Matriz de Permissões (RBAC).
  * 
  * ATENÇÃO ARQUITETURAL: Como o Supabase não suporta transações nativas entre o Schema `auth` 
  * e o `public` facilmente via API HTTP, esta função utiliza um padrão de "Mecanismo de Compensação" 
@@ -78,13 +58,27 @@ export async function createTenantOnboarding(data: OnboardingData) {
 
   try {
     // ====================================================================================
-    // PASSO 2: PROVISIONAMENTO DO TENANT (MATRIZ EMPRESARIAL E LICENCIAMENTO)
+    // PASSO 2: VALIDAÇÃO DINÂMICA DO LICENCIAMENTO (SaaS) E LIMITES
     // ====================================================================================
-    
+    // Consulta a tabela administrativa global para garantir que o plano contratado existe, 
+    // está ativo e extrai a cota técnica permitida.
+    const { data: planoData, error: planoError } = await supabaseAdmin
+      .from('adm_planos_assinatura')
+      .select('limite_usuarios')
+      .eq('codigo', data.plano)
+      .eq('ativo', true)
+      .single();
+
+    if (planoError || !planoData) {
+      throw new Error("O plano de assinatura selecionado é inválido ou foi desativado no sistema.");
+    }
+
     // Normalização de Dados: Otimiza o armazenamento no banco convertendo strings longas em char único
     const charTipo = data.tipoDocumento === 'PJ' ? 'J' : 'F'; 
-    const limiteUsuarios = getLimiteUsuariosPorPlano(data.plano);
 
+    // ====================================================================================
+    // PASSO 3: PROVISIONAMENTO DO TENANT (MATRIZ EMPRESARIAL)
+    // ====================================================================================
     const { data: tenantData, error: tenantError } = await supabaseAdmin
       .from('tenants')
       .insert([
@@ -102,7 +96,7 @@ export async function createTenantOnboarding(data: OnboardingData) {
           cidade: data.cidade,
           estado: data.estado,
           plano_atual: data.plano, // Grava a assinatura escolhida no onboarding
-          limite_usuarios: limiteUsuarios // Define a trava operacional sistêmica
+          limite_usuarios: planoData.limite_usuarios // Trava operacional sistêmica resgatada do banco
         }
       ])
       .select('id')
@@ -112,7 +106,7 @@ export async function createTenantOnboarding(data: OnboardingData) {
     const tenantId = tenantData.id;
 
     // ====================================================================================
-    // PASSO 3: CRIAÇÃO DA FILIAL PADRÃO (ESTRUTURA FÍSICA)
+    // PASSO 4: CRIAÇÃO DA FILIAL PADRÃO (ESTRUTURA FÍSICA)
     // ====================================================================================
     // Necessário pois o controle de PDV e Estoque exige uma localidade física (filial_id)
     const { data: filialData, error: filialError } = await supabaseAdmin
@@ -131,10 +125,10 @@ export async function createTenantOnboarding(data: OnboardingData) {
     const filialId = filialData.id;
 
     // ====================================================================================
-    // PASSO 4: FABRICAÇÃO DO CONTROLE DE ACESSO (RBAC) E PERMISSÕES
+    // PASSO 5: FABRICAÇÃO DO CONTROLE DE ACESSO (RBAC) E PERMISSÕES
     // ====================================================================================
     
-    // 4.1 Instanciação do Cargo Hierárquico
+    // 5.1 Instanciação do Cargo Hierárquico (Perfil Mestre)
     const { data: perfilData, error: perfilInsertError } = await supabaseAdmin
       .from('perfis')
       .insert([
@@ -149,7 +143,7 @@ export async function createTenantOnboarding(data: OnboardingData) {
     if (perfilInsertError) throw perfilInsertError;
     const perfilId = perfilData.id;
 
-    // 4.2 Atribuição em Lote (Bulk Insert) de privilégios para os módulos core
+    // 5.2 Atribuição em Lote (Bulk Insert) de privilégios para os módulos core
     const modulosCore = ['pdv', 'cozinha_kds', 'produtos', 'configuracoes'];
     const permissoesPayload = modulosCore.map(mod => ({
       perfil_id: perfilId,
@@ -166,7 +160,7 @@ export async function createTenantOnboarding(data: OnboardingData) {
 
     if (permissoesError) throw permissoesError;
 
-    // 4.3 Acoplamento: Vincula a identidade de Auth ao Perfil Administrativo e à Empresa
+    // 5.3 Acoplamento: Vincula a identidade de Auth ao Perfil Administrativo e à Empresa
     const { error: userProfileError } = await supabaseAdmin
       .from('perfis_usuarios')
       .insert([

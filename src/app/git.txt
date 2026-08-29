@@ -1,6 +1,6 @@
 git init
 git add .
-git commit -m "Primeiro Commit do Web App Para Cantinas"
+git commit -m "Modulo de Configuracoes do Usuario"
 git branch -M main
 git remote add origin https://github.com/italoribeiro/cantinafy.git
 git push -u origin main

@@ -2,6 +2,30 @@
 'use server';
 
 import { createTenantOnboarding } from '@/core/services/tenant-service';
+import { supabaseAdmin } from '@/lib/supabase/admin'; // Instância com poderes para ler tabelas adm_
+
+/**
+ * @function fetchPlanosAtivos
+ * @description Proxy Server-Side para coletar os planos de assinatura do sistema.
+ * É executado no backend para proteger a tabela administrativa e retorna apenas os campos necessários para a UI.
+ * 
+ * @returns {Promise<Array>} Array de objetos contendo os dados comerciais dos planos ativos.
+ */
+export async function fetchPlanosAtivos() {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('adm_planos_assinatura')
+      .select('codigo, nome, descricao, preco_mensal, limite_usuarios, features, is_destaque')
+      .eq('ativo', true)
+      .order('preco_mensal', { ascending: true }); // Ordena do mais barato (Free) ao Premium
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    // Retorna array vazio em caso de falha, cabendo ao frontend exibir estado de erro/loading
+    return [];
+  }
+}
 
 /**
  * @function fetchCnpjData
@@ -98,7 +122,7 @@ export async function handleCadastroWizard(formData: FormData) {
   const estado = formData.get('estado') as string;
   
   // Extração do Plano SaaS: Aplica fallback rigoroso caso a interface envie um valor nulo
-  const plano = (formData.get('plano') as any) || 'free';
+  const plano = (formData.get('plano') as string) || 'free';
 
   // 2. Validação Defensiva (Sanitization Level 1)
   // Previne chamadas desnecessárias ao banco de dados garantindo a integridade mínima
@@ -123,7 +147,7 @@ export async function handleCadastroWizard(formData: FormData) {
       bairro,
       cidade,
       estado,
-      plano // Repassa a escolha do licenciamento
+      plano // Repassa a escolha do licenciamento para a validação no banco
     });
     
     // Sinaliza à View que a operação foi concluída e o redirecionamento pode ocorrer
