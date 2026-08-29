@@ -50,21 +50,23 @@ export function TenantProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     async function loadSessionData() {
+      console.log('🔄 [TenantContext] Iniciando carregamento da sessão...');
       try {
-        // 1. Verifica identidade (Sessão Local do Navegador)
+        // 1. Verifica Auth
         const { data: authData, error: authError } = await supabase.auth.getUser();
         
-        // CORREÇÃO: Redirecionamento suave sem disparar 'throw' para o Next.js
         if (authError || !authData.user) {
-          console.warn('Sem sessão ativa. Redirecionando para login...');
+          console.warn('❌ [TenantContext] Sem sessão no Auth. Redirecionando...', authError);
           router.push('/login');
-          return; // Encerra a execução da função aqui
+          return;
         }
 
         const userId = authData.user.id;
         const email = authData.user.email || '';
+        console.log(`✅ [TenantContext] Usuário Auth detectado: ${email} (ID: ${userId})`);
 
-        // 2. Busca o vínculo do usuário com a Cantina (Tenant)
+        // 2. Busca Perfil e Relacionamentos
+        console.log('⏳ [TenantContext] Buscando dados no banco (perfis_usuarios + tenants)...');
         const { data: perfilData, error: perfilError } = await supabase
           .from('perfis_usuarios')
           .select(`
@@ -75,21 +77,41 @@ export function TenantProvider({ children }: { children: ReactNode }) {
           .eq('id', userId)
           .single();
 
-        // CORREÇÃO: Evita crash caso o perfil ainda não tenha sido finalizado
-        if (perfilError || !perfilData) {
-          console.warn('Perfil incompleto. Redirecionando...');
+        if (perfilError) {
+          console.error('❌ [TenantContext] ERRO SQL ao buscar perfil:', perfilError);
           router.push('/login');
           return;
         }
 
-        // 3. Busca a lista de filiais
-        const { data: filiaisData } = await supabase
+        if (!perfilData) {
+          console.error('❌ [TenantContext] PERFIL NÃO ENCONTRADO no banco para o ID:', userId);
+          router.push('/login');
+          return;
+        }
+
+        console.log('✅ [TenantContext] Dados do banco retornados com sucesso:', perfilData);
+
+        // Verifica se as colunas novas do SaaS estão quebrando
+        const tenantsInfo = perfilData.tenants as any;
+        if (tenantsInfo.limite_usuarios === null || tenantsInfo.limite_usuarios === undefined) {
+          console.warn('⚠️ [TenantContext] ALERTA: limite_usuarios está NULO na tabela tenants. Isso pode quebrar a UI.');
+        }
+
+        // 3. Busca Filiais
+        console.log('⏳ [TenantContext] Buscando filiais da cantina...');
+        const { data: filiaisData, error: filiaisError } = await supabase
           .from('filiais')
           .select('id, nome, is_matriz')
           .eq('tenant_id', perfilData.tenant_id)
           .order('is_matriz', { ascending: false });
 
-        // 4. Transformação Visual (Iniciais)
+        if (filiaisError) {
+          console.error('❌ [TenantContext] ERRO SQL ao buscar filiais:', filiaisError);
+        }
+
+        console.log(`✅ [TenantContext] ${filiaisData?.length || 0} filiais encontradas.`);
+
+        // 4. Transformação Visual
         const iniciais = perfilData.nome
           .split(' ')
           .map((n: string) => n[0])
@@ -97,27 +119,29 @@ export function TenantProvider({ children }: { children: ReactNode }) {
           .join('')
           .toUpperCase();
 
-        // 5. Consolidação
+        // 5. Monta Sessão
         setSession({
           usuario_id: userId,
           email: email,
           nome_usuario: perfilData.nome,
           iniciais: iniciais,
           tenant_id: perfilData.tenant_id,
-          nome_fantasia: (perfilData.tenants as any).nome_fantasia,
-          plano_atual: (perfilData.tenants as any).plano_atual,
-          limite_usuarios: (perfilData.tenants as any).limite_usuarios,
+          nome_fantasia: tenantsInfo.nome_fantasia,
+          plano_atual: tenantsInfo.plano_atual,
+          limite_usuarios: tenantsInfo.limite_usuarios,
           perfil_id: perfilData.perfil_id,
           perfil_nome: (perfilData.perfis as any).nome,
           filial_ativa_id: perfilData.filial_id || (filiaisData && filiaisData[0]?.id),
           filiais_disponiveis: filiaisData || [],
         });
+        
+        console.log('🎉 [TenantContext] Sessão montada e liberada para o Dashboard!');
 
       } catch (error) {
-        console.error('Erro inesperado na sessão:', error);
+        console.error('🚨 [TenantContext] ERRO CRÍTICO TRY/CATCH:', error);
         router.push('/login');
       } finally {
-        setIsLoading(false); // Libera a tela de bloqueio
+        setIsLoading(false);
       }
     }
 
