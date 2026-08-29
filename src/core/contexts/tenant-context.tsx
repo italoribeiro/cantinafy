@@ -128,6 +128,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
           .toUpperCase();
 
         // 5. Monta Sessão
+     
         setSession({
           usuario_id: userId,
           email: email,
@@ -138,7 +139,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
           plano_atual: tenantsInfo.plano_atual,
           limite_usuarios: tenantsInfo.limite_usuarios,
           perfil_id: perfilData.perfil_id,
-          perfil_nome: (perfilData.perfis as any).nome,
+          perfil_nome: (perfilData.perfis as any)?.nome || 'Administrador Geral', // <-- Blindado contra null
           filial_ativa_id: perfilData.filial_id || (filiaisData && filiaisData[0]?.id),
           filiais_disponiveis: filiaisData || [],
         });
