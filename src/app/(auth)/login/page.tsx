@@ -4,11 +4,12 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client'; // Importando o cliente SSR configurado
 
 /**
  * @description Página de Autenticação (Login).
  * Interface atualizada com o novo template visual e funcionalidade de ocultar/mostrar senha.
- * Responsável por capturar as credenciais do usuário e repassar para a API do Supabase.
+ * Responsável por capturar as credenciais do usuário e autenticar via Supabase SSR.
  * 
  * @returns {JSX.Element} A interface interativa de login renderizada.
  */
@@ -24,13 +25,16 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Instanciando o cliente Supabase
+  const supabase = createClient();
+
   // ==========================================
   // CONTROLADORES DE EVENTOS (HANDLERS)
   // ==========================================
 
   /**
    * @description Orquestra a submissão do formulário de login.
-   * Aciona o estado de loading e invoca o serviço de autenticação.
+   * Aciona o estado de loading e invoca o serviço de autenticação do Supabase.
    * @param {React.FormEvent} e - Evento de submissão do formulário.
    */
   const handleLogin = async (e: React.FormEvent) => {
@@ -38,12 +42,28 @@ export default function LoginPage() {
     setIsLoading(true);
     setErrorMsg('');
 
-    // TODO: Implementar chamada real ao Supabase Auth (signInWithPassword)
-    // Simulação temporária para fluxo de UI
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      // Chamada real de autenticação
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        throw new Error('E-mail ou senha incorretos.');
+      }
+
+      // Redireciona para o dashboard após o login bem-sucedido
       router.push('/dashboard');
-    }, 1500);
+      
+      // Opcional: Para garantir que o layout recarregue o contexto com o novo cookie,
+      // em alguns cenários do Next.js App Router, usar router.refresh() antes de router.push() é útil.
+      router.refresh(); 
+
+    } catch (error: any) {
+      setErrorMsg(error.message || 'Falha ao autenticar. Tente novamente.');
+      setIsLoading(false);
+    }
   };
 
   /**
