@@ -18,6 +18,7 @@ interface PlanoAssinatura {
   limite_usuarios: number;
   features: any; // Armazenado como JSONB
   is_destaque: boolean;
+  dias_trial: number; // <-- Nova propriedade adicionada para o SaaS de Teste
 }
 
 /**
@@ -46,7 +47,7 @@ export default function CadastroWizardPage() {
     nomeFantasia: '', razaoSocial: '', whatsapp: '',
     cep: '', logradouro: '', numero: '', complemento: '', bairro: '', 
     cidade: '', estado: '', 
-    plano: 'free' // Estado inicial (será sobreposto pelo primeiro plano do banco se necessário)
+    plano: 'basico' // Mudamos o fallback inicial para basico, já que o free não existe mais
   });
 
   // ==========================================
@@ -61,9 +62,9 @@ export default function CadastroWizardPage() {
       const planos = await fetchPlanosAtivos();
       setPlanosDb(planos);
       
-      // Auto-seleção amigável: se a tabela de planos retornou dados mas não tem plano 'free',
+      // Auto-seleção amigável: se a tabela de planos retornou dados mas não tem plano atual selecionado,
       // seleciona automaticamente o primeiro plano da lista para evitar form quebrado.
-      if (planos.length > 0 && !planos.find(p => p.codigo === 'free')) {
+      if (planos.length > 0 && !planos.find(p => p.codigo === formData.plano)) {
         setFormData(prev => ({ ...prev, plano: planos[0].codigo }));
       }
     }
@@ -238,7 +239,7 @@ export default function CadastroWizardPage() {
                   Carregando planos de assinatura seguros...
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {/* Função Map itera sobre os planos retornados pelo Supabase criando os cartões */}
                   {planosDb.map((plano) => (
                     <button
@@ -271,10 +272,17 @@ export default function CadastroWizardPage() {
                         </p>
                       </div>
 
-                      {/* Tag Inferior: Informação Operacional sobre a Cota de Usuários */}
-                      <span className={`inline-block mt-3 px-2 py-0.5 text-[10px] font-bold rounded w-fit ${plano.limite_usuarios > 10 ? 'bg-green-100 text-green-800' : 'bg-slate-200 text-slate-700'}`}>
-                        {plano.limite_usuarios === 999 ? 'Usuários Ilimitados' : `Até ${plano.limite_usuarios} usuários`}
-                      </span>
+                      <div className="flex flex-col items-start gap-1 mt-3">
+                        {/* TAG DINÂMICA DO TRIAL */}
+                        {plano.dias_trial && plano.dias_trial > 0 && (
+                          <span className="inline-block px-2 py-0.5 text-[10px] font-bold rounded bg-green-100 text-green-800 uppercase border border-green-200">
+                            {plano.dias_trial} Dias Grátis
+                          </span>
+                        )}
+                        <span className={`inline-block px-2 py-0.5 text-[10px] font-bold rounded ${plano.limite_usuarios > 10 ? 'bg-slate-200 text-slate-700' : 'bg-slate-200 text-slate-700'}`}>
+                          {plano.limite_usuarios === 999 ? 'Usuários Ilimitados' : `Até ${plano.limite_usuarios} usuários`}
+                        </span>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -439,7 +447,7 @@ export default function CadastroWizardPage() {
                 disabled={isLoading}
                 className="flex-1 py-3.5 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 disabled:opacity-70 shadow-lg shadow-red-600/20 transition-all"
               >
-                {isLoading ? 'Configurando sua operação...' : 'Concluir Cadastro'}
+                {isLoading ? 'Configurando ambiente...' : 'Começar Teste Grátis'}
               </button>
             </div>
           </form>
