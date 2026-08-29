@@ -2,15 +2,15 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { createBrowserClient } from '@supabase/ssr'; // <-- Alterado para o client que lê Cookies
 import { useRouter } from 'next/navigation';
 
 /**
- * @description Inicialização do Cliente Supabase Nativo para o Front-End (Client-Side).
+ * @description Inicialização do Cliente Supabase preparado para ler os Cookies do Next.js
  */
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = createBrowserClient(supabaseUrl, supabaseAnonKey);
 
 export interface Filial {
   id: string;
@@ -52,7 +52,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     async function loadSessionData() {
       console.log('🔄 [TenantContext] Iniciando carregamento da sessão...');
       try {
-        // 1. Verifica Auth
+        // 1. Verifica Auth usando os Cookies Seguros via @supabase/ssr
         const { data: authData, error: authError } = await supabase.auth.getUser();
         
         if (authError || !authData.user) {
