@@ -79,6 +79,14 @@ export function TenantProvider({ children }: { children: ReactNode }) {
 
         if (perfilError) {
           console.error('❌ [TenantContext] ERRO SQL ao buscar perfil:', perfilError);
+          
+          // Se o erro for PGRST116 (0 linhas), significa usuário fantasma. 
+          // Precisamos destruir a sessão Auth dele para matar o loop infinito.
+          if (perfilError.code === 'PGRST116') {
+            console.warn('⚠️ Usuário órfão/fantasma detectado. Destruindo token...');
+            await supabase.auth.signOut(); 
+          }
+          
           router.push('/login');
           return;
         }

@@ -15,14 +15,14 @@ export async function fetchPlanosAtivos() {
   try {
     const { data, error } = await supabaseAdmin
       .from('adm_planos_assinatura')
-      .select('codigo, nome, descricao, preco_mensal, limite_usuarios, features, is_destaque')
+      // ATENÇÃO AQUI: Adicionamos a coluna dias_trial no final do select
+      .select('codigo, nome, descricao, preco_mensal, limite_usuarios, features, is_destaque, dias_trial')
       .eq('ativo', true)
-      .order('preco_mensal', { ascending: true }); // Ordena do mais barato (Free) ao Premium
+      .order('preco_mensal', { ascending: true });
 
     if (error) throw error;
     return data || [];
   } catch (error) {
-    // Retorna array vazio em caso de falha, cabendo ao frontend exibir estado de erro/loading
     return [];
   }
 }
