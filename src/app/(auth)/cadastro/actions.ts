@@ -112,6 +112,11 @@ export async function handleCadastroWizard(formData: FormData) {
   const documento = formData.get('documento') as string;
   const nomeFantasia = formData.get('nomeFantasia') as string;
   const razaoSocial = formData.get('razaoSocial') as string;
+  
+  // EXTRAÇÃO DE COMPLIANCE JURÍDICO
+  const nomeResponsavel = formData.get('nomeResponsavel') as string;
+  const cpfResponsavel = formData.get('cpfResponsavel') as string;
+
   const whatsapp = formData.get('whatsapp') as string;
   const cep = formData.get('cep') as string;
   const logradouro = formData.get('logradouro') as string;
@@ -126,7 +131,7 @@ export async function handleCadastroWizard(formData: FormData) {
 
   // 2. Validação Defensiva (Sanitization Level 1)
   // Previne chamadas desnecessárias ao banco de dados garantindo a integridade mínima
-  if (!email || password.length < 6 || !nomeFantasia || !documento) {
+  if (!email || password.length < 6 || !nomeFantasia || !documento || !nomeResponsavel) {
     return { error: 'A integridade dos dados falhou. Preencha todos os campos vitais corretamente.' };
   }
 
@@ -139,6 +144,8 @@ export async function handleCadastroWizard(formData: FormData) {
       documento,
       nomeFantasia,
       razaoSocial,
+      nomeResponsavel, // Repassando o nome real (PF ou Responsável PJ)
+      cpfResponsavel,  // Repassando o CPF legal (se aplicável)
       whatsapp,
       cep,
       logradouro,

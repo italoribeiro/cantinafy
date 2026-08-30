@@ -13,6 +13,8 @@ interface OnboardingData {
   documento: string;
   nomeFantasia: string;
   razaoSocial?: string;
+  nomeResponsavel: string; // <-- TS AGORA CONHECE: Nome real da pessoa física
+  cpfResponsavel?: string; // <-- TS AGORA CONHECE: CPF do responsável
   whatsapp: string;
   cep: string;
   logradouro: string;

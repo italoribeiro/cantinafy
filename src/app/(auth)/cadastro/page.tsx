@@ -25,7 +25,8 @@ interface PlanoAssinatura {
  * @component CadastroWizardPage
  * @description View de Onboarding (Máquina de Estado UI com 2 Passos).
  * Etapa 1: Credenciais de Acesso.
- * Etapa 2: Seleção Dinâmica de Plano SaaS (carregada do banco) e Dados Estruturais da Cantina.
+ * Etapa 2: Seleção Dinâmica de Plano SaaS (carregada do banco) e Dados Estruturais da Cantina,
+ * incluindo regras de compliance para designação de Responsável Legal (PF) em cadastros PJ.
  * 
  * @returns {JSX.Element} A interface interativa de cadastro.
  */
@@ -43,8 +44,14 @@ export default function CadastroWizardPage() {
   const [planosDb, setPlanosDb] = useState<PlanoAssinatura[]>([]);
   
   const [formData, setFormData] = useState({
-    email: '', password: '', tipoDocumento: 'PJ', documento: '',
-    nomeFantasia: '', razaoSocial: '', whatsapp: '',
+    email: '', password: '', 
+    tipoDocumento: 'PJ', 
+    documento: '', // CNPJ ou CPF principal
+    nomeFantasia: '', 
+    razaoSocial: '', 
+    nomeResponsavel: '', // Nome da PF ou do Responsável Legal PJ
+    cpfResponsavel: '',  // CPF do Responsável (Exigido apenas para cadastros PJ)
+    whatsapp: '',
     cep: '', logradouro: '', numero: '', complemento: '', bairro: '', 
     cidade: '', estado: '', 
     plano: 'basico' // Mudamos o fallback inicial para basico, já que o free não existe mais
@@ -139,11 +146,25 @@ export default function CadastroWizardPage() {
 
   /**
    * @description Submissão final (Etapa 2) que empacota o estado no FormData e aciona o motor transacional.
+   * Aplica validação estrita de compliance jurídico antes de despachar a carga para o servidor.
    */
   const handleFinalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setErrorMsg('');
+
+    // Validação de Frontend: Compliance de Responsável Legal
+    if (formData.tipoDocumento === 'PJ' && (!formData.nomeResponsavel || !formData.cpfResponsavel)) {
+        setErrorMsg('Compliance SaaS: Para cadastros PJ, é obrigatório designar o Nome e CPF do responsável legal.');
+        setIsLoading(false);
+        return;
+    }
+    
+    if (formData.tipoDocumento === 'PF' && !formData.nomeResponsavel) {
+        setErrorMsg('Por favor, informe seu Nome Completo para prosseguir.');
+        setIsLoading(false);
+        return;
+    }
 
     const data = new FormData();
     Object.entries(formData).forEach(([key, value]) => data.append(key, value as string));
@@ -291,31 +312,31 @@ export default function CadastroWizardPage() {
 
             {/* Bloco 2: Identificação Jurídica/Física */}
             <div className="bg-slate-50 p-5 rounded-xl border border-slate-100 space-y-4">
-              <h3 className="text-sm font-black text-slate-400 uppercase tracking-wider">Identificação</h3>
+              <h3 className="text-sm font-black text-slate-400 uppercase tracking-wider">Identificação Empresarial</h3>
               
-              {/* Botões Toggle de Natureza Jurídica */}
+              {/* Botões Toggle de Natureza Jurídica (Limpa os campos de Responsável ao alternar) */}
               <div className="grid grid-cols-2 gap-4">
                 <button 
                   type="button"
-                  onClick={() => setFormData({...formData, tipoDocumento: 'PJ', documento: ''})}
+                  onClick={() => setFormData({...formData, tipoDocumento: 'PJ', documento: '', cpfResponsavel: ''})}
                   className={`py-2 text-sm font-bold rounded-xl border-2 transition-all ${formData.tipoDocumento === 'PJ' ? 'border-red-600 text-red-600 bg-red-50' : 'border-slate-200 text-slate-500 bg-white hover:bg-slate-50'}`}
                 >
                   Pessoa Jurídica (CNPJ)
                 </button>
                 <button 
                   type="button"
-                  onClick={() => setFormData({...formData, tipoDocumento: 'PF', documento: ''})}
+                  onClick={() => setFormData({...formData, tipoDocumento: 'PF', documento: '', cpfResponsavel: ''})}
                   className={`py-2 text-sm font-bold rounded-xl border-2 transition-all ${formData.tipoDocumento === 'PF' ? 'border-red-600 text-red-600 bg-red-50' : 'border-slate-200 text-slate-500 bg-white hover:bg-slate-50'}`}
                 >
                   Pessoa Física (CPF)
                 </button>
               </div>
 
-              {/* Campos de Identidade e Contato */}
+              {/* Campos Principais da Entidade (CNPJ ou CPF) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-1">
-                    {formData.tipoDocumento === 'PJ' ? 'CNPJ' : 'CPF'}
+                    {formData.tipoDocumento === 'PJ' ? 'CNPJ da Empresa' : 'Seu CPF'}
                   </label>
                   <input 
                     type="text" required
@@ -327,7 +348,9 @@ export default function CadastroWizardPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-1">Nome Fantasia</label>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">
+                    {formData.tipoDocumento === 'PJ' ? 'Nome Fantasia' : 'Nome da Cantina'}
+                  </label>
                   <input 
                     type="text" required
                     value={formData.nomeFantasia}
@@ -337,8 +360,54 @@ export default function CadastroWizardPage() {
                 </div>
               </div>
 
+              {/* ========================================================
+                  BLOCO DE COMPLIANCE: RESPONSÁVEL LEGAL (Condicional) 
+                  ======================================================== */}
+              {formData.tipoDocumento === 'PJ' ? (
+                <div className="mt-4 pt-4 border-t border-slate-200 space-y-4">
+                  <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-100 text-xs text-blue-800">
+                    <span className="font-bold block mb-1">Compliance Legal (SaaS)</span>
+                    É obrigatório designar uma pessoa física (CPF) como responsável legal pela assinatura corporativa.
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-1">Nome Completo do Responsável</label>
+                      <input 
+                        type="text" required
+                        value={formData.nomeResponsavel}
+                        onChange={e => setFormData({...formData, nomeResponsavel: e.target.value})}
+                        className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-red-600 outline-none text-sm font-medium"
+                        placeholder="Nome da pessoa física responsável"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-1">CPF do Responsável</label>
+                      <input 
+                        type="text" required
+                        value={formData.cpfResponsavel}
+                        onChange={e => setFormData({...formData, cpfResponsavel: e.target.value})}
+                        className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-red-600 outline-none text-sm font-medium"
+                        placeholder="000.000.000-00"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Seu Nome Completo</label>
+                    <input 
+                      type="text" required
+                      value={formData.nomeResponsavel}
+                      onChange={e => setFormData({...formData, nomeResponsavel: e.target.value})}
+                      className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-red-600 outline-none text-sm font-medium"
+                      placeholder="Nome do dono da conta"
+                    />
+                </div>
+              )}
+              {/* ======================================================== */}
+
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">WhatsApp de Contato</label>
+                <label className="block text-sm font-bold text-slate-700 mb-1 mt-4">WhatsApp de Contato</label>
                 <input 
                   type="text" required
                   value={formData.whatsapp}
